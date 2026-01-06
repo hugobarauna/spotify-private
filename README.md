@@ -6,13 +6,13 @@ Perfect for work/focus playlists that don't represent your actual music taste.
 
 ## Features
 
-- Enables Private Session automatically when Spotify launches
-- **Re-enables after Mac wakes from sleep** (session expires during sleep)
-- Refreshes before Spotify's 6-hour auto-expiry
-- **Persists state across Hammerspoon restarts**
-- Minimal UI interruption (restores focus after enabling)
-- Menubar icon shows when Private Session is active
-- Click icon to manually trigger refresh
+- **Auto-enable on launch**: Activates Private Session whenever Spotify starts
+- **Sleep/wake aware**: Re-enables after your Mac wakes (sessions expire during sleep)
+- **Smart refresh**: Renews 30 minutes before Spotify's 6-hour auto-expiry
+- **Persistent state**: Remembers session timing across Hammerspoon restarts
+- **Focus-friendly**: Restores your previous app after toggling the menu
+- **Menubar indicator**: Shows when Private Session is active
+- **Manual trigger**: Click the icon to force a refresh anytime
 
 ## Requirements
 
@@ -43,14 +43,13 @@ The menubar icon appears when Spotify is running with Private Session active.
 
 ## How It Works
 
-Spotify doesn't provide an API to control Private Session, so this tool uses UI automation (AppleScript) to click the Spotify menu and toggle Private Session.
+Spotify doesn't provide an API for Private Session, so this tool uses **UI automation** (AppleScript) to interact with the Spotify menu.
 
-The script:
-1. Watches for Spotify launch/quit events and system sleep/wake events
-2. Enables Private Session after a short delay
-3. Schedules a refresh 30 minutes before the 6-hour expiry
-4. Persists state to file for recovery across restarts
-5. Shows a menubar icon when active
+1. **Watches events** — Spotify launch/quit, system sleep/wake
+2. **Enables Private Session** — After a short delay to let Spotify initialize
+3. **Schedules refresh** — 30 minutes before the 6-hour expiry
+4. **Persists state** — Saves timing to disk for crash recovery
+5. **Shows status** — Menubar icon indicates active session
 
 ## Configuration
 
