@@ -4,19 +4,17 @@ Automatically keeps Spotify's Private Session enabled on macOS.
 
 ## The Problem
 
-Spotify learns from everything you listen to and uses it to shape your recommendations, Discover Weekly, and taste profile. But sometimes you listen to music that doesn't represent your actual taste:
+Spotify learns from everything you listen to — shaping your recommendations, Discover Weekly, and year-end Wrapped. But what you listen to while working often doesn't represent your actual taste.
 
-- **Work/focus playlists** — Lo-fi beats or ambient noise for concentration
-- **Kids/family listening** — Children's music on a shared account
-- **Background music** — Generic playlists for parties or guests
-- **Exploring genres** — Trying something new without committing to it
+I listen to instrumental jazz all day while coding. After months of this, my Spotify thought I was a jazz fanatic. My Wrapped was full of artists I'd never actively chosen. My Discover Weekly stopped surfacing music I actually wanted.
 
-Spotify's **Private Session** prevents this, but it has problems:
+**Spotify's Private Session** prevents this — your listening doesn't affect recommendations. But it has problems:
+
 - **Auto-expires after 6 hours** — Easy to forget to re-enable
-- **Resets when Spotify restarts** — Lost every time you reboot
-- **No API access** — Can't be automated through normal means
+- **Resets on app restart** — Lost every time Spotify or your Mac reboots
+- **No API access** — Can't be automated through official means
 
-This tool solves all of that.
+This tool keeps Private Session enabled automatically, so your work listening never pollutes your Spotify profile.
 
 ## Features
 
