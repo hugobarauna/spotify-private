@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HAMMERSPOON_DIR="$HOME/.hammerspoon"
 SOURCE_FILE="$SCRIPT_DIR/spotify-private.lua"
 TARGET_FILE="$HAMMERSPOON_DIR/spotify-private.lua"
+CORE_SOURCE="$SCRIPT_DIR/spotify-private-core.lua"
+CORE_TARGET="$HAMMERSPOON_DIR/spotify-private-core.lua"
 ICON_SOURCE="$SCRIPT_DIR/icon-private.png"
 ICON_TARGET="$HAMMERSPOON_DIR/icon-private.png"
 INIT_FILE="$HAMMERSPOON_DIR/init.lua"
@@ -30,6 +32,15 @@ fi
 
 echo "Creating symlink: $TARGET_FILE -> $SOURCE_FILE"
 ln -s "$SOURCE_FILE" "$TARGET_FILE"
+
+# Create symlink for core module
+if [ -L "$CORE_TARGET" ]; then
+    rm "$CORE_TARGET"
+elif [ -f "$CORE_TARGET" ]; then
+    rm "$CORE_TARGET"
+fi
+echo "Creating symlink: $CORE_TARGET -> $CORE_SOURCE"
+ln -s "$CORE_SOURCE" "$CORE_TARGET"
 
 # Create symlink for icon
 if [ -L "$ICON_TARGET" ]; then

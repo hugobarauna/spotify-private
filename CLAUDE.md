@@ -6,18 +6,22 @@ Automatically keeps Spotify's Private Session enabled on macOS so your listening
 
 ## How It Works
 
-1. **Hammerspoon** watches for Spotify app launch/quit events
+1. **Hammerspoon** watches for Spotify app launch/quit events and **system sleep/wake events**
 2. When Spotify launches, waits 2 seconds then enables Private Session via **UI automation** (AppleScript clicks the Spotify menu)
-3. Tracks when Private Session was enabled
+3. Tracks when Private Session was enabled (using monotonic time for accuracy)
 4. Schedules a refresh 30 minutes before the 6-hour expiry (Spotify auto-disables Private Session after 6 hours)
-5. Shows a menubar icon when Private Session is active
+5. **Persists state to file** for recovery across Hammerspoon restarts
+6. **Re-enables on wake** from sleep (since timers pause during sleep)
+7. Shows a menubar icon when Private Session is active
 
 ## Key Files
 
 ```
-spotify-private.lua    # Main Hammerspoon module (symlinked to ~/.hammerspoon/)
-icon-private.png       # Menubar icon - SF Symbol "wave.3.down.circle.fill" exported at 66x64px
-install.sh             # Creates symlinks to ~/.hammerspoon/
+spotify-private.lua         # Main Hammerspoon module (symlinked to ~/.hammerspoon/)
+spotify-private-core.lua    # Pure logic functions (testable without Hammerspoon)
+spotify-private-core_spec.lua  # Busted tests for core logic
+icon-private.png            # Menubar icon - SF Symbol "wave.3.down.circle.fill" exported at 66x64px
+install.sh                  # Creates symlinks to ~/.hammerspoon/
 ```
 
 ## Architecture Decisions
@@ -42,19 +46,36 @@ Early versions checked every 10 minutes, causing visible UI flicker (menu openin
 - Icon only appears when Spotify is running with Private Session active
 - Click icon to manually trigger a check
 
-## Configuration (in spotify-private.lua)
+## Configuration (in spotify-private-core.lua)
 
 ```lua
 PRIVATE_SESSION_DURATION = 6 * 60 * 60    -- Spotify's 6-hour limit
 REFRESH_BEFORE_EXPIRY = 30 * 60           -- Refresh 30 min before expiry
-LAUNCH_DELAY = 2                          -- Wait after Spotify launch
+WAKE_VERIFICATION_DELAY = 30 * 60         -- Verify sooner after wake
+DEBOUNCE_INTERVAL = 5                     -- Min seconds between checks
+SHORT_SLEEP_THRESHOLD = 5 * 60            -- Skip check if sleep < 5 min
 ```
 
 ## Testing
 
+### Manual Testing
 1. Reload Hammerspoon: `hs -c 'hs.reload()'`
 2. Check logs: `hs -c 'hs.console.getConsole()' | grep spotify`
 3. Manual trigger: Click the menubar icon
+
+### Automated Tests (Busted)
+The core logic is extracted into `spotify-private-core.lua` for testability.
+
+```bash
+# Install dependencies (one-time)
+brew install luarocks
+luarocks install busted
+
+# Run tests
+busted spotify-private-core_spec.lua
+```
+
+Tests cover: time calculations, debounce logic, sleep detection, state serialization/deserialization.
 
 ## Requirements
 
@@ -66,12 +87,9 @@ LAUNCH_DELAY = 2                          -- Wait after Spotify launch
 ## Known Limitations
 
 1. **UI flash on enable** - The AppleScript briefly opens Spotify's menu. Unavoidable without API access.
-2. **Timer resets on Hammerspoon reload** - If you reload config, it assumes Private Session just started.
-3. **No persistence across restarts** - If Mac restarts, timer resets when Spotify next launches.
 
 ## Future Improvements to Consider
 
-- [ ] Persist `lastEnabledTime` to file for accuracy across Hammerspoon reloads
 - [ ] Add "pause" functionality (temporarily disable auto-enable)
 - [ ] Different icons for different states (enabled vs. pending refresh)
 - [ ] Menu dropdown with options instead of just click-to-refresh
