@@ -97,7 +97,7 @@ end
 
 -- AppleScript to enable Private Session (checks first, then enables if needed)
 -- Saves and restores frontmost app to minimize focus disruption
-local ENABLE_SCRIPT = [[
+local CHECK_AND_ENABLE_SCRIPT = [[
 set frontApp to path to frontmost application as text
 tell application "Spotify" to activate
 delay 0.3
@@ -122,6 +122,52 @@ tell application "System Events"
                 key code 53 -- Escape to close menu
                 tell application frontApp to activate
                 return "already_enabled"
+            end if
+        on error errMsg
+            key code 53 -- Escape to close menu if open
+            tell application frontApp to activate
+            return "error:" & errMsg
+        end try
+    end tell
+end tell
+]]
+
+-- AppleScript to force re-enable Private Session (toggles off then on to reset timer)
+-- Used during scheduled refresh to ensure Spotify's 6-hour timer is reset
+local FORCE_REFRESH_SCRIPT = [[
+set frontApp to path to frontmost application as text
+tell application "Spotify" to activate
+delay 0.3
+tell application "System Events"
+    tell process "Spotify"
+        if not (exists menu bar 1) then
+            tell application frontApp to activate
+            return "no_menubar"
+        end if
+        try
+            set spotifyMenu to menu bar item "Spotify" of menu bar 1
+            click spotifyMenu
+            delay 0.1
+            set privateItem to menu item "Private Session" of menu 1 of spotifyMenu
+            set isChecked to (value of attribute "AXMenuItemMarkChar" of privateItem) is not missing value
+            if isChecked then
+                -- Turn OFF first
+                click privateItem
+                delay 0.3
+                -- Re-open menu and turn back ON
+                click spotifyMenu
+                delay 0.1
+                set privateItem to menu item "Private Session" of menu 1 of spotifyMenu
+                click privateItem
+                delay 0.2
+                tell application frontApp to activate
+                return "refreshed"
+            else
+                -- Not enabled, just enable it
+                click privateItem
+                delay 0.2
+                tell application frontApp to activate
+                return "enabled"
             end if
         on error errMsg
             key code 53 -- Escape to close menu if open
@@ -196,7 +242,7 @@ local function scheduleRefresh(customDelay)
     refreshTimer = hs.timer.doAfter(refreshDelay, function()
         if isSpotifyRunning() then
             print("[spotify-private] Scheduled refresh triggered")
-            ensurePrivateSession()
+            ensurePrivateSession({ forceRefresh = true })
         end
     end)
 
@@ -207,6 +253,7 @@ end
 -- Options:
 --   skipDebounce: bypass debounce check (for manual triggers)
 --   afterWake: use shorter verification timer if already_enabled
+--   forceRefresh: force toggle off/on to reset Spotify's 6-hour timer (for scheduled refresh)
 function ensurePrivateSession(options)
     options = options or {}
 
@@ -225,14 +272,23 @@ function ensurePrivateSession(options)
         return
     end
 
-    -- Run the enable script
-    local ok, result = hs.osascript.applescript(ENABLE_SCRIPT)
+    -- Choose script based on whether this is a scheduled refresh
+    local script = options.forceRefresh and FORCE_REFRESH_SCRIPT or CHECK_AND_ENABLE_SCRIPT
+    local ok, result = hs.osascript.applescript(script)
 
     if ok then
         result = result:gsub("^%s*(.-)%s*$", "%1")  -- trim whitespace
 
         if result == "enabled" then
             print("[spotify-private] Private Session enabled")
+            lastEnabledTime = monotonicTime()
+            lastWallClockEnabled = os.time()
+            saveState()
+            updateMenubar("enabled")
+            lastState = "enabled"
+            scheduleRefresh()
+        elseif result == "refreshed" then
+            print("[spotify-private] Private Session refreshed (toggled off/on)")
             lastEnabledTime = monotonicTime()
             lastWallClockEnabled = os.time()
             saveState()
