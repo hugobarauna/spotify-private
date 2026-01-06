@@ -11,8 +11,7 @@ Perfect for work/focus playlists that don't represent your actual music taste.
 - **Smart refresh**: Renews 30 minutes before Spotify's 6-hour auto-expiry
 - **Persistent state**: Remembers session timing across Hammerspoon restarts
 - **Focus-friendly**: Restores your previous app after toggling the menu
-- **Menubar indicator**: Shows when Private Session is active
-- **Manual trigger**: Click the icon to force a refresh anytime
+- **Menubar icon**: Quick access to manually trigger Private Session with one click
 
 ## Requirements
 
@@ -39,7 +38,7 @@ Perfect for work/focus playlists that don't represent your actual music taste.
 
 4. **Start Hammerspoon** and you're done!
 
-The menubar icon appears when Spotify is running with Private Session active.
+A menubar icon appears when Spotify is running. Click it to manually trigger Private Session.
 
 ## How It Works
 
@@ -49,7 +48,6 @@ Spotify doesn't provide an API for Private Session, so this tool uses **UI autom
 2. **Enables Private Session** — After a short delay to let Spotify initialize
 3. **Schedules refresh** — 30 minutes before the 6-hour expiry
 4. **Persists state** — Saves timing to disk for crash recovery
-5. **Shows status** — Menubar icon indicates active session
 
 ## Configuration
 
