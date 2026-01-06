@@ -1,8 +1,22 @@
 # Spotify Private Session Auto-Enabler
 
-Automatically keeps Spotify's Private Session enabled on macOS, ensuring your listening history on this device never affects your recommendations or taste profile.
+Automatically keeps Spotify's Private Session enabled on macOS.
 
-Perfect for work/focus playlists that don't represent your actual music taste.
+## The Problem
+
+Spotify learns from everything you listen to and uses it to shape your recommendations, Discover Weekly, and taste profile. But sometimes you listen to music that doesn't represent your actual taste:
+
+- **Work/focus playlists** — Lo-fi beats or ambient noise for concentration
+- **Kids/family listening** — Children's music on a shared account
+- **Background music** — Generic playlists for parties or guests
+- **Exploring genres** — Trying something new without committing to it
+
+Spotify's **Private Session** prevents this, but it has problems:
+- **Auto-expires after 6 hours** — Easy to forget to re-enable
+- **Resets when Spotify restarts** — Lost every time you reboot
+- **No API access** — Can't be automated through normal means
+
+This tool solves all of that.
 
 ## Features
 
