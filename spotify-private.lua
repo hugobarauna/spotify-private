@@ -22,12 +22,16 @@ local lastEnabledTime = nil      -- Monotonic time when we last enabled Private 
 local lastWallClockEnabled = nil -- Wall clock time for persistence
 local lastCheckTime = nil        -- For debouncing
 local lastSleepTime = nil        -- Monotonic time when system went to sleep
+local pendingEnable = false      -- True when waiting for user permission to enable
+local pendingIsRefresh = false   -- True if pending enable is a refresh (needs forceRefresh)
+local pendingNotification = nil  -- Active notification (to withdraw before showing new one)
 
 -- Persistence file path
 local STATE_FILE = hs.configdir .. "/spotify-private-state.json"
 
 -- Icons (loaded in M.start())
 local ICON_PRIVATE = nil
+local ICON_PENDING = nil  -- Different icon when waiting for user to enable
 
 -- Get monotonic time in seconds (not affected by clock changes)
 local function monotonicTime()
@@ -115,16 +119,33 @@ tell application "System Events"
             set isChecked to (value of attribute "AXMenuItemMarkChar" of privateItem) is not missing value
             if not isChecked then
                 click privateItem
-                delay 0.2
+                delay 0.3
+                -- Menu should auto-close after click, but ensure it's closed
+                key code 53
+                delay 0.1
+                key code 53
+                -- Hide Spotify window and return to previous app
+                set visible to false
                 tell application frontApp to activate
                 return "enabled"
             else
-                key code 53 -- Escape to close menu
+                -- Close menu robustly with multiple escape attempts
+                key code 53
+                delay 0.1
+                key code 53
+                delay 0.1
+                -- Hide Spotify window and return to previous app
+                set visible to false
                 tell application frontApp to activate
                 return "already_enabled"
             end if
         on error errMsg
-            key code 53 -- Escape to close menu if open
+            -- Try hard to close any open menu
+            key code 53
+            delay 0.1
+            key code 53
+            delay 0.1
+            key code 53
             tell application frontApp to activate
             return "error:" & errMsg
         end try
@@ -159,18 +180,35 @@ tell application "System Events"
                 delay 0.1
                 set privateItem to menu item "Private Session" of menu 1 of spotifyMenu
                 click privateItem
-                delay 0.2
+                delay 0.3
+                -- Menu should auto-close after click, but ensure it's closed
+                key code 53
+                delay 0.1
+                key code 53
+                -- Hide Spotify window and return to previous app
+                set visible to false
                 tell application frontApp to activate
                 return "refreshed"
             else
                 -- Not enabled, just enable it
                 click privateItem
-                delay 0.2
+                delay 0.3
+                -- Ensure menu is closed
+                key code 53
+                delay 0.1
+                key code 53
+                -- Hide Spotify window and return to previous app
+                set visible to false
                 tell application frontApp to activate
                 return "enabled"
             end if
         on error errMsg
-            key code 53 -- Escape to close menu if open
+            -- Try hard to close any open menu
+            key code 53
+            delay 0.1
+            key code 53
+            delay 0.1
+            key code 53
             tell application frontApp to activate
             return "error:" & errMsg
         end try
@@ -189,6 +227,7 @@ local function updateMenubar(state)
     if not menubar then return end
 
     if state == "enabled" or state == "already_enabled" then
+        pendingEnable = false
         if ICON_PRIVATE then
             menubar:setTitle(nil)
             menubar:setIcon(ICON_PRIVATE, true)
@@ -203,11 +242,22 @@ local function updateMenubar(state)
             end
         end
         menubar:setTooltip("Spotify Private Session: Active" .. timeLeft)
+    elseif state == "pending" then
+        pendingEnable = true
+        if ICON_PENDING then
+            menubar:setTitle(nil)
+            menubar:setIcon(ICON_PENDING, true)
+        else
+            menubar:setTitle("○")  -- Empty circle = needs action
+        end
+        menubar:setTooltip("Click to enable Private Session")
     elseif state == "not_running" then
+        pendingEnable = false
         menubar:setTitle(nil)
         menubar:setIcon(nil)
         menubar:setTooltip("Spotify: Not running")
     else
+        pendingEnable = false
         menubar:setTitle("⚠️")
         menubar:setIcon(nil)
         menubar:setTooltip("Spotify Private Session: " .. (state or "Unknown"))
@@ -216,7 +266,7 @@ end
 
 -- Show notification only on failure (and only once per failure state)
 local function notifyIfNeeded(state, message)
-    if state ~= "enabled" and state ~= "already_enabled" and state ~= "not_running" then
+    if state ~= "enabled" and state ~= "already_enabled" and state ~= "not_running" and state ~= "pending" then
         if lastState ~= state then
             hs.notify.new({
                 title = "Spotify Private Session",
@@ -226,6 +276,53 @@ local function notifyIfNeeded(state, message)
         end
     end
     lastState = state
+end
+
+-- Request user permission to enable Private Session
+-- Shows notification and updates menubar to pending state
+-- If isRefresh is true, will use forceRefresh to toggle off/on when user approves
+local function requestEnablePermission(reason, isRefresh)
+    if not isSpotifyRunning() then
+        updateMenubar("not_running")
+        return
+    end
+
+    -- Already pending, don't spam
+    if pendingEnable then
+        return
+    end
+
+    print("[spotify-private] Requesting permission: " .. (reason or "enable Private Session"))
+    updateMenubar("pending")
+    lastState = "pending"
+    pendingIsRefresh = isRefresh or false
+
+    -- Withdraw any existing notification to prevent accumulation
+    if pendingNotification then
+        pendingNotification:withdraw()
+        pendingNotification = nil
+    end
+
+    -- Show notification with action
+    local notification = hs.notify.new(function(n)
+        -- User clicked the notification - enable now
+        print("[spotify-private] User approved via notification")
+        pendingNotification = nil  -- Clear reference since user acted
+        if pendingIsRefresh then
+            ensurePrivateSession({ skipDebounce = true, forceRefresh = true })
+        else
+            ensurePrivateSession({ skipDebounce = true })
+        end
+        pendingIsRefresh = false
+    end, {
+        title = "Spotify Private Session",
+        informativeText = reason or "Click to enable Private Session",
+        actionButtonTitle = "Enable",
+        hasActionButton = true,
+        withdrawAfter = 0,  -- Don't auto-withdraw, stay until user acts
+    })
+    notification:send()
+    pendingNotification = notification
 end
 
 -- Schedule the next refresh before expiry
@@ -242,7 +339,7 @@ local function scheduleRefresh(customDelay)
     refreshTimer = hs.timer.doAfter(refreshDelay, function()
         if isSpotifyRunning() then
             print("[spotify-private] Scheduled refresh triggered")
-            ensurePrivateSession({ forceRefresh = true })
+            requestEnablePermission("Private Session expiring soon - click to refresh", true)
         end
     end)
 
@@ -254,6 +351,7 @@ end
 --   skipDebounce: bypass debounce check (for manual triggers)
 --   afterWake: use shorter verification timer if already_enabled
 --   forceRefresh: force toggle off/on to reset Spotify's 6-hour timer (for scheduled refresh)
+--   savedTiming: { enabledAt, elapsed } - use saved timing if session was already_enabled
 function ensurePrivateSession(options)
     options = options or {}
 
@@ -297,18 +395,28 @@ function ensurePrivateSession(options)
             scheduleRefresh()
         elseif result == "already_enabled" then
             print("[spotify-private] Private Session already active")
-            -- If we don't know when it was enabled, assume now (conservative)
-            -- But if this is after wake, use shorter verification timer
+            -- Use saved timing if available, otherwise assume now (conservative)
             if not lastEnabledTime then
-                lastEnabledTime = monotonicTime()
-                lastWallClockEnabled = os.time()
-                saveState()
-                if options.afterWake then
+                if options.savedTiming then
+                    -- Use saved timing from persisted state
+                    lastWallClockEnabled = options.savedTiming.enabledAt
+                    lastEnabledTime = monotonicTime() - options.savedTiming.elapsed
+                    local refreshIn = core.refreshDelayForRestoredState(options.savedTiming.elapsed, CONFIG)
+                    print(string.format("[spotify-private] Using saved timing, refresh in %s", core.formatTime(refreshIn)))
+                    saveState()
+                    scheduleRefresh(refreshIn)
+                elseif options.afterWake then
                     -- After wake, we don't know the true session age
                     -- Schedule a shorter verification check
+                    lastEnabledTime = monotonicTime()
+                    lastWallClockEnabled = os.time()
+                    saveState()
                     print("[spotify-private] After wake: scheduling verification in 30 min")
                     scheduleRefresh(CONFIG.WAKE_VERIFICATION_DELAY)
                 else
+                    lastEnabledTime = monotonicTime()
+                    lastWallClockEnabled = os.time()
+                    saveState()
                     scheduleRefresh()
                 end
             end
@@ -332,8 +440,10 @@ end
 
 -- Handle Spotify launch
 local function onSpotifyLaunch()
-    print("[spotify-private] Spotify launched, waiting " .. LAUNCH_DELAY .. "s before enabling Private Session")
-    hs.timer.doAfter(LAUNCH_DELAY, ensurePrivateSession)
+    print("[spotify-private] Spotify launched")
+    hs.timer.doAfter(LAUNCH_DELAY, function()
+        requestEnablePermission("Spotify started - click to enable Private Session")
+    end)
 end
 
 -- Handle Spotify quit
@@ -398,29 +508,10 @@ local function onSystemWake()
     lastWallClockEnabled = nil
 
     if isSpotifyRunning() then
-        -- Try to reload state from file (saved before sleep)
-        local savedEnabledAt, elapsedSinceEnable = loadState()
-        if savedEnabledAt and elapsedSinceEnable then
-            if core.isRestoredStateUsable(elapsedSinceEnable, CONFIG) then
-                -- Session is still valid, restore state and schedule refresh
-                lastWallClockEnabled = savedEnabledAt
-                lastEnabledTime = monotonicTime() - elapsedSinceEnable
-                local refreshIn = core.refreshDelayForRestoredState(elapsedSinceEnable, CONFIG)
-                print(string.format("[spotify-private] Restored session after wake, refresh in %s", core.formatTime(refreshIn)))
-                scheduleRefresh(refreshIn)
-                updateMenubar("enabled")
-                lastState = "enabled"
-                return
-            else
-                print("[spotify-private] Saved session expired during sleep, will re-enable")
-                clearState()
-            end
-        end
-
-        -- No valid saved state, check and enable Private Session
-        print("[spotify-private] Spotify running after wake, checking Private Session")
+        -- Ask permission to verify/enable Private Session after wake
+        print("[spotify-private] Spotify running after wake, requesting permission")
         hs.timer.doAfter(LAUNCH_DELAY, function()
-            ensurePrivateSession({ afterWake = true })
+            requestEnablePermission("Woke from sleep - click to verify Private Session")
         end)
     end
 end
@@ -437,7 +528,17 @@ end
 -- Manual check (called from menubar click)
 local function manualCheck()
     print("[spotify-private] Manual check triggered")
-    ensurePrivateSession({ skipDebounce = true })
+    -- Withdraw notification if user clicked menubar instead
+    if pendingNotification then
+        pendingNotification:withdraw()
+        pendingNotification = nil
+    end
+    if pendingIsRefresh then
+        ensurePrivateSession({ skipDebounce = true, forceRefresh = true })
+    else
+        ensurePrivateSession({ skipDebounce = true })
+    end
+    pendingIsRefresh = false
 end
 
 -- Initialize
@@ -471,32 +572,13 @@ function M.start()
     sleepWatcher:start()
     print("[spotify-private] Sleep/wake watcher started")
 
-    -- Try to load persisted state (from previous session/restart)
-    local savedEnabledAt, elapsedSinceEnable = loadState()
-    if savedEnabledAt and elapsedSinceEnable and isSpotifyRunning() then
-        -- We have a valid saved state and Spotify is running
-        if core.isRestoredStateUsable(elapsedSinceEnable, CONFIG) then
-            -- Session is still valid and not close to expiry
-            -- Set up state and schedule refresh
-            lastWallClockEnabled = savedEnabledAt
-            lastEnabledTime = monotonicTime() - elapsedSinceEnable
-            local refreshIn = core.refreshDelayForRestoredState(elapsedSinceEnable, CONFIG)
-            print(string.format("[spotify-private] Restored session state, refresh in %s", core.formatTime(refreshIn)))
-            scheduleRefresh(refreshIn)
-            updateMenubar("enabled")
-            lastState = "enabled"
-        else
-            -- Session is close to expiry or expired, clear and re-check
-            print("[spotify-private] Saved session near expiry, will re-enable")
-            clearState()
-        end
-    end
-
-    -- Check immediately if Spotify is already running (and we don't have valid restored state)
-    if isSpotifyRunning() and not lastEnabledTime then
-        print("[spotify-private] Spotify already running, checking Private Session")
-        hs.timer.doAfter(1, ensurePrivateSession)
-    elseif not isSpotifyRunning() then
+    -- On startup, ask permission if Spotify is running
+    if isSpotifyRunning() then
+        print("[spotify-private] Spotify running on startup")
+        hs.timer.doAfter(1, function()
+            requestEnablePermission("Hammerspoon started - click to enable Private Session")
+        end)
+    else
         updateMenubar("not_running")
     end
 

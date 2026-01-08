@@ -7,12 +7,13 @@ Automatically keeps Spotify's Private Session enabled on macOS so your listening
 ## How It Works
 
 1. **Hammerspoon** watches for Spotify app launch/quit events and **system sleep/wake events**
-2. When Spotify launches, waits 2 seconds then enables Private Session via **UI automation** (AppleScript clicks the Spotify menu)
-3. Tracks when Private Session was enabled (using monotonic time for accuracy)
-4. Schedules a refresh 30 minutes before the 6-hour expiry (Spotify auto-disables Private Session after 6 hours)
-5. **Persists state to file** for recovery across Hammerspoon restarts
-6. **Re-enables on wake** from sleep (since timers pause during sleep)
-7. Shows a menubar icon when Private Session is active
+2. When action is needed (Spotify launch, wake from sleep, refresh), shows a **notification with "Enable" button** instead of automatically stealing focus
+3. User clicks the notification (or menubar icon) when ready - then it enables Private Session via **UI automation** (AppleScript clicks the Spotify menu)
+4. After enabling, **hides the Spotify window** to minimize disruption
+5. Tracks when Private Session was enabled (using monotonic time for accuracy)
+6. Schedules a refresh 30 minutes before the 6-hour expiry (Spotify auto-disables Private Session after 6 hours)
+7. **Persists state to file** for recovery across Hammerspoon restarts
+8. Shows a menubar icon: **●** when active, **○** when pending user action
 
 ## Key Files
 
@@ -42,9 +43,10 @@ Early versions checked every 10 minutes, causing visible UI flicker (menu openin
 - No polling in between = no UI glitches
 
 ### Menubar Icon
-- Uses SF Symbols exported as PNG (template mode for light/dark adaptation)
-- Icon only appears when Spotify is running with Private Session active
-- Click icon to manually trigger a check
+- **●** (filled) when Private Session is active - uses SF Symbols PNG (template mode for light/dark adaptation)
+- **○** (empty) when pending user action - indicates you need to click to enable
+- Click icon to enable/refresh Private Session
+- Tooltip shows status and time until next refresh
 
 ## Configuration (in spotify-private-core.lua)
 
@@ -82,6 +84,7 @@ Tests cover: time calculations, debounce logic, sleep detection, state serializa
 - macOS
 - Hammerspoon (`brew install --cask hammerspoon`)
 - Accessibility permission for Hammerspoon (System Settings > Privacy & Security > Accessibility)
+- Notifications enabled for Hammerspoon (System Settings > Notifications > Hammerspoon)
 - SF Symbols app for icon editing (`brew install --cask sf-symbols`)
 
 ## Known Limitations
@@ -91,9 +94,9 @@ Tests cover: time calculations, debounce logic, sleep detection, state serializa
 ## Future Improvements to Consider
 
 - [ ] Add "pause" functionality (temporarily disable auto-enable)
-- [ ] Different icons for different states (enabled vs. pending refresh)
+- [x] ~~Different icons for different states~~ - Now shows ● (active) vs ○ (pending)
 - [ ] Menu dropdown with options instead of just click-to-refresh
-- [ ] Notification when refresh happens (optional, off by default)
+- [x] ~~Notification when refresh happens~~ - Now shows notification asking for permission before any UI automation
 
 ## Troubleshooting
 
