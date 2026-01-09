@@ -264,6 +264,16 @@ local function updateMenubar(state)
     end
 end
 
+-- Clear pending state (used when user acts or state becomes stale)
+local function clearPendingState()
+    pendingEnable = false
+    pendingIsRefresh = false
+    if pendingNotification then
+        pendingNotification:withdraw()
+        pendingNotification = nil
+    end
+end
+
 -- Show notification only on failure (and only once per failure state)
 local function notifyIfNeeded(state, message)
     if state ~= "enabled" and state ~= "already_enabled" and state ~= "not_running" and state ~= "pending" then
@@ -508,6 +518,12 @@ local function onSystemWake()
     lastWallClockEnabled = nil
 
     if isSpotifyRunning() then
+        -- Clear any stale pending state from before sleep (notification is likely gone)
+        if pendingEnable then
+            print("[spotify-private] Clearing stale pending state from before sleep")
+            clearPendingState()
+        end
+
         -- Ask permission to verify/enable Private Session after wake
         print("[spotify-private] Spotify running after wake, requesting permission")
         hs.timer.doAfter(LAUNCH_DELAY, function()
@@ -528,17 +544,14 @@ end
 -- Manual check (called from menubar click)
 local function manualCheck()
     print("[spotify-private] Manual check triggered")
-    -- Withdraw notification if user clicked menubar instead
-    if pendingNotification then
-        pendingNotification:withdraw()
-        pendingNotification = nil
-    end
-    if pendingIsRefresh then
+    -- Capture refresh flag before clearing, then clear pending state
+    local isRefresh = pendingIsRefresh
+    clearPendingState()
+    if isRefresh then
         ensurePrivateSession({ skipDebounce = true, forceRefresh = true })
     else
         ensurePrivateSession({ skipDebounce = true })
     end
-    pendingIsRefresh = false
 end
 
 -- Initialize
