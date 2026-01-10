@@ -554,6 +554,58 @@ local function manualCheck()
     end
 end
 
+-- Build the menubar dropdown menu
+local function buildMenu()
+    local menu = {}
+
+    -- Status indicator (disabled, just for display)
+    local statusText = "Status: Unknown"
+    if not isSpotifyRunning() then
+        statusText = "Spotify not running"
+    elseif pendingEnable then
+        statusText = "Status: Pending (click Enable)"
+    elseif lastState == "enabled" or lastState == "already_enabled" then
+        statusText = "Status: Private Session Active"
+        if lastEnabledTime then
+            local remaining = core.remainingTime(lastEnabledTime, monotonicTime(), CONFIG.PRIVATE_SESSION_DURATION)
+            if remaining > 0 then
+                statusText = statusText .. " (" .. core.formatTime(remaining) .. " left)"
+            end
+        end
+    elseif lastState == "error" then
+        statusText = "Status: Error"
+    end
+    table.insert(menu, { title = statusText, disabled = true })
+
+    -- Separator
+    table.insert(menu, { title = "-" })
+
+    -- Enable/Refresh action
+    local actionTitle = "Enable Private Session"
+    if lastState == "enabled" or lastState == "already_enabled" then
+        actionTitle = "Refresh Private Session"
+    end
+    table.insert(menu, {
+        title = actionTitle,
+        fn = manualCheck,
+        disabled = not isSpotifyRunning()
+    })
+
+    -- Separator
+    table.insert(menu, { title = "-" })
+
+    -- Quit option
+    table.insert(menu, {
+        title = "Quit",
+        fn = function()
+            print("[spotify-private] User requested quit")
+            M.stop()
+        end
+    })
+
+    return menu
+end
+
 -- Initialize
 function M.start()
     print("[spotify-private] Starting Spotify Private Session auto-enabler")
@@ -569,11 +621,12 @@ function M.start()
         print("[spotify-private] Warning: Could not load icon from: " .. iconPath)
     end
 
-    -- Create menubar
+    -- Create menubar with click action and right-click menu
     menubar = hs.menubar.new()
     if menubar then
-        menubar:setTooltip("Spotify Private Session")
-        menubar:setClickCallback(manualCheck)
+        menubar:setTooltip("Spotify Private Session (click to toggle, right-click for menu)")
+        menubar:setClickCallback(manualCheck)  -- Left-click toggles Private Session
+        menubar:setMenu(buildMenu)             -- Right-click shows dropdown menu
     end
 
     -- Start app watcher
