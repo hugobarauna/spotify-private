@@ -15,6 +15,7 @@ local LAUNCH_DELAY = 2  -- Seconds to wait after Spotify launches (Hammerspoon-s
 -- State
 local menubar = nil
 local refreshTimer = nil
+local pollTimer = nil            -- Background poll for icon honesty
 local appWatcher = nil
 local sleepWatcher = nil
 local lastState = nil
@@ -262,6 +263,18 @@ if outcome is "verify_failed" then return "verify_failed"
 return "error:could not access the Private Session menu item"
 ]]
 
+-- AppleScript to read the actual Private Session state with ZERO visible
+-- effect (no window raise, no menu open). Used by the background poll.
+local READ_STATE_SCRIPT = APPLESCRIPT_HANDLERS .. [[
+tell application "System Events"
+	if not (exists process "Spotify") then return "not_running"
+end tell
+set currentState to my readPrivateState()
+if currentState is true then return "on"
+if currentState is false then return "off"
+return "error"
+]]
+
 -- Check if Spotify is running
 local function isSpotifyRunning()
     local app = hs.application.find("Spotify")
@@ -401,6 +414,41 @@ local function scheduleRefresh(customDelay)
 
     print(string.format("[spotify-private] Next refresh scheduled in %s", core.formatTime(refreshDelay)))
 end
+
+-- Background poll: invisibly reconcile believed state with Spotify's actual
+-- Private Session state so the menubar icon never lies (catches early expiry
+-- and manual toggles). Read-only - never triggers UI automation.
+local function pollActualState()
+    if not isSpotifyRunning() then return end
+
+    local ok, result = hs.osascript.applescript(READ_STATE_SCRIPT)
+    local actual = ok and result:gsub("^%s*(.-)%s*$", "%1") or "error"
+
+    local action = core.decidePollAction(lastState, actual)
+    if action == "request_enable" then
+        print("[spotify-private] Poll: Private Session turned off externally")
+        if refreshTimer then
+            refreshTimer:stop()
+            refreshTimer = nil
+        end
+        lastEnabledTime = nil
+        lastWallClockEnabled = nil
+        clearState()
+        requestEnablePermission("Private Session turned off - click to re-enable")
+    elseif action == "adopt_enabled" then
+        print("[spotify-private] Poll: Private Session enabled externally, adopting")
+        clearPendingState()
+        lastEnabledTime = monotonicTime()
+        lastWallClockEnabled = os.time()
+        saveState()
+        updateMenubar("enabled")
+        lastState = "enabled"
+        scheduleRefresh()
+    elseif lastState == "enabled" and actual == "on" then
+        updateMenubar("enabled")  -- refresh the tooltip countdown
+    end
+end
+M.pollNow = pollActualState  -- exposed for manual testing via hs CLI
 
 -- Main function to ensure Private Session is enabled
 -- Options:
@@ -730,6 +778,10 @@ function M.start()
     sleepWatcher:start()
     print("[spotify-private] Sleep/wake watcher started")
 
+    -- Background poll (invisible reads keep the icon honest)
+    pollTimer = hs.timer.doEvery(CONFIG.POLL_INTERVAL, pollActualState)
+    print(string.format("[spotify-private] Background poll every %s", core.formatTime(CONFIG.POLL_INTERVAL)))
+
     -- On startup, ask permission if Spotify is running
     if isSpotifyRunning() then
         print("[spotify-private] Spotify running on startup")
@@ -746,6 +798,7 @@ end
 -- Cleanup
 function M.stop()
     if refreshTimer then refreshTimer:stop() end
+    if pollTimer then pollTimer:stop() end
     if appWatcher then appWatcher:stop() end
     if sleepWatcher then sleepWatcher:stop() end
     if menubar then menubar:delete() end
