@@ -99,121 +99,167 @@ local function markCheck()
     lastCheckTime = monotonicTime()
 end
 
--- AppleScript to enable Private Session (checks first, then enables if needed)
--- Saves and restores frontmost app to minimize focus disruption
-local CHECK_AND_ENABLE_SCRIPT = [[
-set frontApp to path to frontmost application as text
-tell application "Spotify" to activate
-delay 0.3
-tell application "System Events"
-    tell process "Spotify"
-        if not (exists menu bar 1) then
-            tell application frontApp to activate
-            return "no_menubar"
-        end if
-        try
-            set spotifyMenu to menu bar item "Spotify" of menu bar 1
-            click spotifyMenu
-            delay 0.1
-            set privateItem to menu item "Private Session" of menu 1 of spotifyMenu
-            set isChecked to (value of attribute "AXMenuItemMarkChar" of privateItem) is not missing value
-            if not isChecked then
-                click privateItem
-                delay 0.3
-                -- Menu should auto-close after click, but ensure it's closed
-                key code 53
-                delay 0.1
-                key code 53
-                -- Hide Spotify window and return to previous app
-                set visible to false
-                tell application frontApp to activate
-                return "enabled"
-            else
-                -- Close menu robustly with multiple escape attempts
-                key code 53
-                delay 0.1
-                key code 53
-                delay 0.1
-                -- Hide Spotify window and return to previous app
-                set visible to false
-                tell application frontApp to activate
-                return "already_enabled"
-            end if
-        on error errMsg
-            -- Try hard to close any open menu
-            key code 53
-            delay 0.1
-            key code 53
-            delay 0.1
-            key code 53
-            tell application frontApp to activate
-            return "error:" & errMsg
-        end try
-    end tell
-end tell
+-- Shared AppleScript handlers for robust, *verified* Private Session toggling.
+--
+-- Evidence-based design (probed live against Spotify 1.2.90):
+--   * The "Private Session" item is DISABLED (AXEnabled=false) unless Spotify's
+--     window is visible AND Spotify is frontmost. Clicking a disabled item
+--     silently no-ops — the root cause of "clicked Enable, nothing happened".
+--     `reopen` recreates a closed window (plain `activate` does not), and the
+--     item takes ~0.5-1s to become enabled after the window comes up.
+--   * The item only fires via open-menu-then-click-item. Menu-closed clicks,
+--     AXPress, and synthesized mouse events all no-op in this Spotify build.
+--   * `click` returning success does NOT mean the item toggled, so every
+--     toggle re-reads AXMenuItemMarkChar (readable WITHOUT opening the menu,
+--     so verification is invisible) and retries until the flip is confirmed.
+local APPLESCRIPT_HANDLERS = [[
+-- Read the Private Session checkmark without opening the menu (invisible).
+-- Returns: true (on) / false (off) / "error".
+on readPrivateState()
+	tell application "System Events" to tell process "Spotify"
+		try
+			return (value of attribute "AXMenuItemMarkChar" of menu item "Private Session" of menu 1 of menu bar item "Spotify" of menu bar 1) is not missing value
+		on error
+			return "error"
+		end try
+	end tell
+end readPrivateState
+
+-- Make the menu item clickable: window visible + Spotify frontmost, then wait
+-- until the item reports AXEnabled (takes ~0.5-1s). Returns true/false.
+on makeSpotifyReady()
+	tell application "Spotify"
+		reopen
+		activate
+	end tell
+	tell application "System Events" to tell process "Spotify"
+		repeat 30 times
+			try
+				if (value of attribute "AXEnabled" of menu item "Private Session" of menu 1 of menu bar item "Spotify" of menu bar 1) then return true
+			end try
+			delay 0.2
+		end repeat
+	end tell
+	return false
+end makeSpotifyReady
+
+-- Open the Spotify menu and wait until it is actually open. Returns true/false.
+on openSpotifyMenu()
+	tell application "System Events" to tell process "Spotify"
+		click menu bar item "Spotify" of menu bar 1
+		repeat 10 times
+			try
+				if (value of attribute "AXSelected" of menu bar item "Spotify" of menu bar 1) then return true
+			end try
+			delay 0.1
+		end repeat
+	end tell
+	return false
+end openSpotifyMenu
+
+-- Close the menu if it is still open (defensive: never leave an orphan).
+on closeSpotifyMenuIfOpen()
+	tell application "System Events" to tell process "Spotify"
+		try
+			if (value of attribute "AXSelected" of menu bar item "Spotify" of menu bar 1) then key code 53
+		end try
+	end tell
+end closeSpotifyMenuIfOpen
+
+-- Toggle the item once via open-menu-then-click and confirm the checkmark
+-- flipped. The menu auto-closes when the item is clicked. Returns true/false.
+on toggleAndVerify()
+	set beforeState to my readPrivateState()
+	if beforeState is "error" then return false
+	if not (my openSpotifyMenu()) then return false
+	delay 0.1
+	tell application "System Events" to tell process "Spotify"
+		try
+			click menu item "Private Session" of menu 1 of menu bar item "Spotify" of menu bar 1
+		on error
+			my closeSpotifyMenuIfOpen()
+			return false
+		end try
+	end tell
+	repeat 10 times
+		delay 0.15
+		set nowState to my readPrivateState()
+		if nowState is not "error" and nowState is not beforeState then return true
+	end repeat
+	my closeSpotifyMenuIfOpen()
+	return false
+end toggleAndVerify
+
+-- Drive Private Session to the desired state, verifying each toggle.
+-- Returns: "ok" / "verify_failed" / "error".
+on setPrivateState(wantOn)
+	repeat 3 times
+		set currentState to my readPrivateState()
+		if currentState is "error" then return "error"
+		if currentState is wantOn then return "ok"
+		my toggleAndVerify()
+	end repeat
+	if (my readPrivateState()) is wantOn then return "ok"
+	return "verify_failed"
+end setPrivateState
+
+-- Hide Spotify's window again and return focus to the previous app.
+on restoreFocus(frontApp)
+	tell application "System Events"
+		try
+			set visible of process "Spotify" to false
+		end try
+	end tell
+	tell application frontApp to activate
+end restoreFocus
 ]]
 
--- AppleScript to force re-enable Private Session (toggles off then on to reset timer)
--- Used during scheduled refresh to ensure Spotify's 6-hour timer is reset
-local FORCE_REFRESH_SCRIPT = [[
+-- AppleScript to enable Private Session (verified end state).
+-- Fast path: if already on, the check is an invisible AX read - no window
+-- raise, no menu open, nothing on screen moves.
+local CHECK_AND_ENABLE_SCRIPT = APPLESCRIPT_HANDLERS .. [[
 set frontApp to path to frontmost application as text
-tell application "Spotify" to activate
-delay 0.3
 tell application "System Events"
-    tell process "Spotify"
-        if not (exists menu bar 1) then
-            tell application frontApp to activate
-            return "no_menubar"
-        end if
-        try
-            set spotifyMenu to menu bar item "Spotify" of menu bar 1
-            click spotifyMenu
-            delay 0.1
-            set privateItem to menu item "Private Session" of menu 1 of spotifyMenu
-            set isChecked to (value of attribute "AXMenuItemMarkChar" of privateItem) is not missing value
-            if isChecked then
-                -- Turn OFF first
-                click privateItem
-                delay 0.3
-                -- Re-open menu and turn back ON
-                click spotifyMenu
-                delay 0.1
-                set privateItem to menu item "Private Session" of menu 1 of spotifyMenu
-                click privateItem
-                delay 0.3
-                -- Menu should auto-close after click, but ensure it's closed
-                key code 53
-                delay 0.1
-                key code 53
-                -- Hide Spotify window and return to previous app
-                set visible to false
-                tell application frontApp to activate
-                return "refreshed"
-            else
-                -- Not enabled, just enable it
-                click privateItem
-                delay 0.3
-                -- Ensure menu is closed
-                key code 53
-                delay 0.1
-                key code 53
-                -- Hide Spotify window and return to previous app
-                set visible to false
-                tell application frontApp to activate
-                return "enabled"
-            end if
-        on error errMsg
-            -- Try hard to close any open menu
-            key code 53
-            delay 0.1
-            key code 53
-            delay 0.1
-            key code 53
-            tell application frontApp to activate
-            return "error:" & errMsg
-        end try
-    end tell
+	if not (exists process "Spotify") then return "not_running"
 end tell
+if (my readPrivateState()) is true then return "already_enabled"
+if not (my makeSpotifyReady()) then
+	my restoreFocus(frontApp)
+	return "no_menubar"
+end if
+set outcome to my setPrivateState(true)
+my restoreFocus(frontApp)
+if outcome is "ok" then return "enabled"
+if outcome is "verify_failed" then return "verify_failed"
+return "error:could not access the Private Session menu item"
+]]
+
+-- AppleScript to force re-enable Private Session (verified toggle off then on)
+-- to reset Spotify's 6-hour timer. Used during scheduled refresh.
+local FORCE_REFRESH_SCRIPT = APPLESCRIPT_HANDLERS .. [[
+set frontApp to path to frontmost application as text
+tell application "System Events"
+	if not (exists process "Spotify") then return "not_running"
+end tell
+if not (my makeSpotifyReady()) then
+	my restoreFocus(frontApp)
+	return "no_menubar"
+end if
+set currentState to my readPrivateState()
+if currentState is "error" then
+	my restoreFocus(frontApp)
+	return "error:could not read Private Session state"
+end if
+set wasOn to (currentState is true)
+if wasOn then my setPrivateState(false)
+set outcome to my setPrivateState(true)
+my restoreFocus(frontApp)
+if outcome is "ok" then
+	if wasOn then return "refreshed"
+	return "enabled"
+end if
+if outcome is "verify_failed" then return "verify_failed"
+return "error:could not access the Private Session menu item"
 ]]
 
 -- Check if Spotify is running
@@ -382,69 +428,115 @@ function ensurePrivateSession(options)
 
     -- Choose script based on whether this is a scheduled refresh
     local script = options.forceRefresh and FORCE_REFRESH_SCRIPT or CHECK_AND_ENABLE_SCRIPT
+    local attempt = options.attempt or 1
     local ok, result = hs.osascript.applescript(script)
 
-    if ok then
+    -- Normalize into a plain string we can classify (covers AppleScript
+    -- execution failures too, which come back as ok == false).
+    if not ok then
+        result = "error:" .. tostring(result or "AppleScript execution failed")
+    elseif result then
         result = result:gsub("^%s*(.-)%s*$", "%1")  -- trim whitespace
-
-        if result == "enabled" then
-            print("[spotify-private] Private Session enabled")
-            lastEnabledTime = monotonicTime()
-            lastWallClockEnabled = os.time()
-            saveState()
-            updateMenubar("enabled")
-            lastState = "enabled"
-            scheduleRefresh()
-        elseif result == "refreshed" then
-            print("[spotify-private] Private Session refreshed (toggled off/on)")
-            lastEnabledTime = monotonicTime()
-            lastWallClockEnabled = os.time()
-            saveState()
-            updateMenubar("enabled")
-            lastState = "enabled"
-            scheduleRefresh()
-        elseif result == "already_enabled" then
-            print("[spotify-private] Private Session already active")
-            -- Use saved timing if available, otherwise assume now (conservative)
-            if not lastEnabledTime then
-                if options.savedTiming then
-                    -- Use saved timing from persisted state
-                    lastWallClockEnabled = options.savedTiming.enabledAt
-                    lastEnabledTime = monotonicTime() - options.savedTiming.elapsed
-                    local refreshIn = core.refreshDelayForRestoredState(options.savedTiming.elapsed, CONFIG)
-                    print(string.format("[spotify-private] Using saved timing, refresh in %s", core.formatTime(refreshIn)))
-                    saveState()
-                    scheduleRefresh(refreshIn)
-                elseif options.afterWake then
-                    -- After wake, we don't know the true session age
-                    -- Schedule a shorter verification check
-                    lastEnabledTime = monotonicTime()
-                    lastWallClockEnabled = os.time()
-                    saveState()
-                    print("[spotify-private] After wake: scheduling verification in 30 min")
-                    scheduleRefresh(CONFIG.WAKE_VERIFICATION_DELAY)
-                else
-                    lastEnabledTime = monotonicTime()
-                    lastWallClockEnabled = os.time()
-                    saveState()
-                    scheduleRefresh()
-                end
-            end
-            updateMenubar("enabled")
-            lastState = "enabled"
-        elseif result == "no_menubar" then
-            print("[spotify-private] Spotify menubar not ready, will retry in 5s")
-            hs.timer.doAfter(5, function() ensurePrivateSession(options) end)
-        else
-            print("[spotify-private] Unexpected result: " .. result)
-            updateMenubar(result)
-            notifyIfNeeded(result, "Unexpected state: " .. result)
-        end
     else
-        local errMsg = result or "AppleScript execution failed"
-        print("[spotify-private] Error: " .. errMsg)
-        updateMenubar("error")
-        notifyIfNeeded("error", errMsg)
+        result = "error:no result from AppleScript"
+    end
+
+    if result == "enabled" then
+        print("[spotify-private] Private Session enabled (verified)")
+        lastEnabledTime = monotonicTime()
+        lastWallClockEnabled = os.time()
+        saveState()
+        updateMenubar("enabled")
+        lastState = "enabled"
+        scheduleRefresh()
+    elseif result == "refreshed" then
+        print("[spotify-private] Private Session refreshed (toggled off/on, verified)")
+        lastEnabledTime = monotonicTime()
+        lastWallClockEnabled = os.time()
+        saveState()
+        updateMenubar("enabled")
+        lastState = "enabled"
+        scheduleRefresh()
+    elseif result == "already_enabled" then
+        print("[spotify-private] Private Session already active")
+        -- Use saved timing if available, otherwise assume now (conservative)
+        if not lastEnabledTime then
+            if options.savedTiming then
+                -- Use saved timing from persisted state
+                lastWallClockEnabled = options.savedTiming.enabledAt
+                lastEnabledTime = monotonicTime() - options.savedTiming.elapsed
+                local refreshIn = core.refreshDelayForRestoredState(options.savedTiming.elapsed, CONFIG)
+                print(string.format("[spotify-private] Using saved timing, refresh in %s", core.formatTime(refreshIn)))
+                saveState()
+                scheduleRefresh(refreshIn)
+            elseif options.afterWake then
+                -- After wake, we don't know the true session age
+                -- Schedule a shorter verification check
+                lastEnabledTime = monotonicTime()
+                lastWallClockEnabled = os.time()
+                saveState()
+                print("[spotify-private] After wake: scheduling verification in 30 min")
+                scheduleRefresh(CONFIG.WAKE_VERIFICATION_DELAY)
+            else
+                lastEnabledTime = monotonicTime()
+                lastWallClockEnabled = os.time()
+                saveState()
+                scheduleRefresh()
+            end
+        end
+        updateMenubar("enabled")
+        lastState = "enabled"
+    elseif result == "not_running" then
+        -- Spotify quit between our isSpotifyRunning() check and the script
+        print("[spotify-private] Spotify not running (quit mid-check)")
+        updateMenubar("not_running")
+        lastState = "not_running"
+    else
+        -- Not a verified success: no_menubar / verify_failed / error:...
+        -- Decide whether a fresh attempt is worth trying.
+        local class = core.classifyResult(result)
+        if core.shouldRetry(class, attempt, CONFIG.MAX_ENABLE_ATTEMPTS) then
+            -- no_menubar means Spotify's UI genuinely isn't ready yet; wait longer.
+            local retryDelay = (result == "no_menubar") and 5 or 1.5
+            print(string.format("[spotify-private] '%s' (attempt %d/%d) - retrying in %ss",
+                result, attempt, CONFIG.MAX_ENABLE_ATTEMPTS, retryDelay))
+            hs.timer.doAfter(retryDelay, function()
+                ensurePrivateSession({
+                    skipDebounce = true,
+                    forceRefresh = options.forceRefresh,
+                    afterWake = options.afterWake,
+                    savedTiming = options.savedTiming,
+                    attempt = attempt + 1,
+                })
+            end)
+        else
+            -- Out of retries (or a fatal result). Be honest: do NOT show the
+            -- active icon, and tell the user it didn't take so they can retry.
+            print(string.format("[spotify-private] Could not confirm Private Session after %d attempt(s): %s", attempt, result))
+            updateMenubar("pending")  -- ○ = action still needed (never a false ●)
+            lastState = "pending"
+            pendingEnable = true
+            pendingIsRefresh = options.forceRefresh or false
+            if pendingNotification then
+                pendingNotification:withdraw()
+                pendingNotification = nil
+            end
+            local note = hs.notify.new(function(n)
+                print("[spotify-private] User retrying after unconfirmed enable")
+                pendingNotification = nil
+                local isRefresh = pendingIsRefresh
+                pendingIsRefresh = false
+                ensurePrivateSession({ skipDebounce = true, forceRefresh = isRefresh })
+            end, {
+                title = "Spotify Private Session",
+                informativeText = "Couldn't confirm Private Session turned on. Click to try again.",
+                actionButtonTitle = "Retry",
+                hasActionButton = true,
+                withdrawAfter = 0,
+            })
+            note:send()
+            pendingNotification = note
+        end
     end
 end
 

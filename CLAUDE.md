@@ -36,6 +36,15 @@ Spotify doesn't expose Private Session via:
 
 UI automation (clicking the Spotify menu) is the only viable approach. It's stable across Spotify updates since menu structure rarely changes.
 
+### UI Automation Constraints (probed live against Spotify 1.2.90)
+
+These rules are load-bearing — violating any of them makes the toggle silently no-op:
+
+1. **The "Private Session" menu item is disabled (`AXEnabled=false`) unless Spotify's window is visible AND Spotify is the frontmost app.** Clicking a disabled item reports success but does nothing. `reopen` is required to recreate a closed window (`activate` alone won't), and the item takes ~0.5-1s to become enabled after the window comes up — so the script polls `AXEnabled` instead of using fixed delays.
+2. **The item only fires via open-menu-then-click-item.** Direct menu-closed clicks, `AXPress`, and synthesized mouse events (eventtap) all no-op in this Spotify build.
+3. **`click` returning success does not mean the item toggled.** Every toggle re-reads `AXMenuItemMarkChar` and retries until the flip is confirmed.
+4. **Reads are invisible.** `AXMenuItemMarkChar` is readable *without* opening the menu, so "is it already on?" checks and post-click verification never open the menu, steal focus, or flicker. Only an actual toggle opens the menu (and item clicks auto-close it — no Escape needed, no orphaned-menu risk).
+
 ### Why Not Frequent Polling?
 Early versions checked every 10 minutes, causing visible UI flicker (menu opening/closing). Current approach:
 - Check once on Spotify launch
@@ -92,7 +101,7 @@ Tests cover: time calculations, debounce logic, sleep detection, state serializa
 
 ## Known Limitations
 
-1. **UI flash on enable** - The AppleScript briefly opens Spotify's menu. Unavoidable without API access.
+1. **UI flash on toggle** - Enabling/refreshing briefly raises Spotify's window and opens its menu (the menu item is disabled otherwise — see UI Automation Constraints). Unavoidable without API access. Checks/verification are invisible.
 
 ## Future Improvements to Consider
 
@@ -111,6 +120,7 @@ Tests cover: time calculations, debounce logic, sleep detection, state serializa
 **Private Session not enabling:**
 - Grant Accessibility permission to Hammerspoon
 - Check that Spotify's menu has "Private Session" option (not available on web player)
+- If the script reports `verify_failed`/`no_menubar`: the menu item never became enabled. Check that Spotify's window can actually open (e.g. not on a disconnected display) — the item stays disabled while the window is hidden/closed or Spotify isn't frontmost
 
 **UI glitch still happening:**
 - Should only happen on Spotify launch and once every ~5.5 hours
