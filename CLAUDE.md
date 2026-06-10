@@ -45,11 +45,12 @@ These rules are load-bearing — violating any of them makes the toggle silently
 3. **`click` returning success does not mean the item toggled.** Every toggle re-reads `AXMenuItemMarkChar` and retries until the flip is confirmed.
 4. **Reads are invisible.** `AXMenuItemMarkChar` is readable *without* opening the menu, so "is it already on?" checks and post-click verification never open the menu, steal focus, or flicker. Only an actual toggle opens the menu (and item clicks auto-close it — no Escape needed, no orphaned-menu risk).
 
-### Why Not Frequent Polling?
-Early versions checked every 10 minutes, causing visible UI flicker (menu opening/closing). Current approach:
-- Check once on Spotify launch
-- Schedule single refresh at 5.5 hours
-- No polling in between = no UI glitches
+### Polling: reads yes, toggles no
+Early versions polled by opening the menu every 10 minutes, causing visible flicker. Now that state reads are invisible (see UI Automation Constraints), a background poll every 15 minutes (`POLL_INTERVAL`) reconciles the icon with reality — catching early session expiry and manual toggles — with zero UI impact:
+- Drift to OFF while icon shows ● → icon flips to ○ + "click to re-enable" notification
+- Enabled externally while icon shows ○ → adopted as enabled + refresh scheduled
+- Toggles (which do flash UI) still happen only on launch/wake/refresh/user click
+- Manual poll trigger for testing: `hs -c 'package.loaded["spotify-private"].pollNow()'`
 
 ### Menubar Icon
 - **●** (filled) when Private Session is active - uses SF Symbols PNG (template mode for light/dark adaptation)
