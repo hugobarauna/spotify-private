@@ -65,17 +65,20 @@ SHORT_SLEEP_THRESHOLD = 5 * 60            -- Skip check if sleep < 5 min
 2. Check logs: `hs -c 'hs.console.getConsole()' | grep spotify`
 3. Manual trigger: Click the menubar icon
 
-### Automated Tests (Busted)
+### Automated Tests
 The core logic is extracted into `spotify-private-core.lua` for testability.
 
 ```bash
-# Install dependencies (one-time)
-brew install luarocks
-luarocks install busted
+# Zero-dependency runner (works with plain lua, no luarocks needed)
+lua run_tests.lua
 
-# Run tests
+# Or with busted, if installed and working
 busted spotify-private-core_spec.lua
 ```
+
+Note: a Homebrew Lua major upgrade (e.g. 5.4 → 5.5) breaks `busted`/`luarocks`
+launchers (they pin the removed interpreter path). `run_tests.lua` is a minimal
+busted-compatible shim that keeps the spec runnable regardless.
 
 Tests cover: time calculations, debounce logic, sleep detection, state serialization/deserialization.
 
