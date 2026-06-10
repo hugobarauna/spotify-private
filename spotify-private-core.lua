@@ -14,6 +14,7 @@ M.DEFAULT_CONFIG = {
     DEBOUNCE_INTERVAL = 5,                      -- 5 seconds
     SHORT_SLEEP_THRESHOLD = 5 * 60,            -- 5 minutes
     MAX_ENABLE_ATTEMPTS = 3,                    -- Retry the enable/refresh script up to 3x on transient failure
+    POLL_INTERVAL = 15 * 60,                    -- Background poll for icon honesty (invisible reads)
 }
 
 -- Calculate remaining time until session expires
@@ -156,6 +157,24 @@ end
 function M.shouldRetry(classification, attempt, maxAttempts)
     maxAttempts = maxAttempts or 3
     return classification == "retry" and attempt < maxAttempts
+end
+
+-- Decide what a background poll should do, given the state the module
+-- believes (lastState) vs what an invisible read actually found.
+-- believedState: "enabled" | "pending" | "not_running" | "error" | nil
+-- actualState:   "on" | "off" | "not_running" | "error"
+-- Returns: "request_enable" | "adopt_enabled" | "none"
+function M.decidePollAction(believedState, actualState)
+    if actualState == "error" or actualState == "not_running" then
+        return "none"  -- transient AX hiccup / app-watcher's job
+    end
+    if believedState == "enabled" and actualState == "off" then
+        return "request_enable"
+    end
+    if believedState ~= "enabled" and actualState == "on" then
+        return "adopt_enabled"
+    end
+    return "none"
 end
 
 -- Format time for display (hours and minutes)
