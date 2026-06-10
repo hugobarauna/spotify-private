@@ -13,6 +13,7 @@ M.DEFAULT_CONFIG = {
     WAKE_VERIFICATION_DELAY = 30 * 60,         -- 30 minutes
     DEBOUNCE_INTERVAL = 5,                      -- 5 seconds
     SHORT_SLEEP_THRESHOLD = 5 * 60,            -- 5 minutes
+    MAX_ENABLE_ATTEMPTS = 3,                    -- Retry the enable/refresh script up to 3x on transient failure
 }
 
 -- Calculate remaining time until session expires
@@ -129,6 +130,32 @@ function M.refreshDelayForRestoredState(elapsedTime, config)
     local remaining = config.PRIVATE_SESSION_DURATION - elapsedTime
     local delay = remaining - config.REFRESH_BEFORE_EXPIRY
     return math.max(0, delay)
+end
+
+-- Classify an AppleScript result string into an action category.
+-- Drives the retry loop in the Hammerspoon layer.
+-- Returns one of: "success" | "retry" | "not_running" | "fatal"
+function M.classifyResult(result)
+    if result == "enabled" or result == "refreshed" or result == "already_enabled" then
+        return "success"
+    elseif result == "not_running" then
+        return "not_running"
+    elseif result == "verify_failed" or result == "no_menubar" then
+        return "retry"
+    elseif type(result) == "string" and (result == "error" or result:sub(1, 6) == "error:") then
+        -- Transient UI/AppleScript hiccups (menu mid-render, focus race) are
+        -- usually recoverable, so a fresh attempt is worth trying.
+        return "retry"
+    else
+        return "fatal"
+    end
+end
+
+-- Decide whether to retry given a classification and the attempt that just ran.
+-- attempt is 1-based (the attempt number that just completed).
+function M.shouldRetry(classification, attempt, maxAttempts)
+    maxAttempts = maxAttempts or 3
+    return classification == "retry" and attempt < maxAttempts
 end
 
 -- Format time for display (hours and minutes)
